@@ -15,3 +15,5 @@ Utilities/Docker/*.tar.gz
 Package.resolved
 /build
 *.pyc
+.vscode
+Utilities/tools

@@ -280,7 +280,7 @@ public class Workspace {
     }
 
     /// The delegate interface.
-    public let delegate: WorkspaceDelegate?
+    public var delegate: WorkspaceDelegate?
 
     /// The path of the workspace data.
     public let dataPath: AbsolutePath
@@ -2287,9 +2287,6 @@ extension Workspace {
 
         try fileSystem.chmod(.userWritable, path: dependencyPath, options: [.recursive, .onlyFiles])
         try fileSystem.removeFileTree(dependencyPath)
-
-        // Remove the clone.
-        try repositoryManager.remove(repository: dependencyToRemove.packageRef.repository)
 
         // Save the state.
         try state.saveState()

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package SPM;
+
+// The build config.
+enum BuildConfiguration {
+    DEBUG = 0;
+    RELEAE = 1;
+}
+
+// The build parameters.
+message BuildParameters {
+    BuildConfiguration config = 1;
+}
+
+// Represents a build request.
+message BuildRequest {
+    string packagePath = 1;
+    BuildParameters parameters = 2;
+    bool verbose = 3;
+}
+
+// Represents a package resolution request.
+message ResolveRequest {
+    string packagePath = 1;
+}
+
+// A simple raw log event.
+message RawLogEvent {
+    string log = 1;
+}
+
+service Service {
+    // Perform package resolution operation.
+    rpc resolve(ResolveRequest) returns (stream RawLogEvent);
+
+    // Perform build operation.
+    rpc build(BuildRequest) returns (stream RawLogEvent);
+}
