@@ -303,6 +303,14 @@ public class SwiftPackageTool: SwiftTool<PackageToolOptions> {
                     at: pkg, version: ToolsVersion.currentToolsVersion.zeroedPatch, fs: localFileSystem)
             }
 
+        case .ws:
+            let workspace = try getActiveWorkspace()
+            let root = try getWorkspaceRoot()
+            workspace.resolve(root: root, diagnostics: diagnostics)
+
+            let generator = WorkspaceGenerator(root: root, workspace: workspace)
+            try generator.generate()
+
         case .generateXcodeproj:
             let graph = try loadPackageGraph()
 
@@ -645,6 +653,10 @@ public class SwiftPackageTool: SwiftTool<PackageToolOptions> {
                 usage: PackageToolOptions.CompletionToolMode.usageText()),
             to: { $0.completionToolMode = $1 })
 
+        _ = parser.add(
+            subparser: PackageMode.ws.rawValue,
+            overview: "Generate an Xcode workspace")
+
         let resolveParser = parser.add(
             subparser: PackageMode.resolve.rawValue,
             overview: "Resolve package dependencies")
@@ -825,6 +837,7 @@ public enum PackageMode: String, StringEnumArgument {
     case dumpPIF = "dump-pif"
     case edit
     case fetch
+    case ws
     case generateXcodeproj = "generate-xcodeproj"
     case completionTool = "completion-tool"
     case initPackage = "init"
