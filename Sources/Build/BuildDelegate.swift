@@ -16,6 +16,7 @@ import Dispatch
 import Foundation
 import LLBuildManifest
 import SPMBuildCore
+import TSCLibc
 
 typealias Diagnostic = TSCBasic.Diagnostic
 
@@ -351,14 +352,14 @@ public final class BuildDelegate: BuildSystemDelegate, SwiftCompilerOutputParser
         self.outputStream = outputStream as? ThreadSafeOutputByteStream ?? ThreadSafeOutputByteStream(outputStream)
         self.progressAnimation = progressAnimation
         self.buildExecutionContext = bctx
+        self.fs = LLBContentHashFileSystem()
+
         self.swiftParsers = bctx.buildDescription?.swiftTargetMap.mapValues {
             SwiftCompilerOutputParser(targetName: $0, delegate: self)
         } ?? [:]
     }
 
-    public var fs: SPMLLBuild.FileSystem? {
-        return nil
-    }
+    public let fs: SPMLLBuild.FileSystem?
 
     public func lookupTool(_ name: String) -> Tool? {
         switch name {
@@ -676,5 +677,29 @@ private extension Diagnostic.Message {
 
     static func swiftCompilerOutputParsingError(_ error: String) -> Diagnostic.Message {
         .error("failed parsing the Swift compiler output: \(error)")
+    }
+}
+
+fileprivate struct LLBContentHashFileSystem: SPMLLBuild.FileSystem {
+    public struct DeviceAgnosticFileInfo: SPMLLBuild.FileInfo {
+        var statBuf: stat
+
+        init(_ statBuf: stat) {
+            var statBuf = statBuf
+            statBuf.st_dev = 0
+            statBuf.st_ino = 0
+            self.statBuf = statBuf
+        }
+    }
+
+    func read(_ path: String) throws -> [UInt8] {
+        try localFileSystem.readFileContents(AbsolutePath(path)).contents
+    }
+
+    func getFileInfo(_ path: String) throws -> SPMLLBuild.FileInfo {
+        var statbuf = stat()
+        let rv = stat(path, &statbuf)
+        guard rv == 0 else { throw StringError("failed to stat \(path) \(errno)") }
+        return DeviceAgnosticFileInfo(statbuf)
     }
 }
