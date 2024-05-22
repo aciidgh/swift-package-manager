@@ -348,7 +348,7 @@ public final class SwiftTool {
 
     static func postprocessArgParserResult(options: GlobalOptions, observabilityScope: ObservabilityScope) throws {
         if options.locations.multirootPackageDataFile != nil {
-            observabilityScope.emit(.unsupportedFlag("--multiroot-data-file"))
+            // observabilityScope.emit(.unsupportedFlag("--multiroot-data-file"))
         }
 
         if options.build.useExplicitModuleBuild && !options.build.useIntegratedSwiftDriver {

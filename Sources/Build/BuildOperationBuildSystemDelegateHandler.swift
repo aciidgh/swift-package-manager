@@ -15,6 +15,7 @@ import Dispatch
 import Foundation
 import LLBuildManifest
 import PackageModel
+import PackageGraph
 import SPMBuildCore
 import SPMLLBuild
 
@@ -716,8 +717,45 @@ final class BuildOperationBuildSystemDelegateHandler: LLBuildBuildSystemDelegate
         }
     }
 
-    func shouldCommandStart(_: SPMLLBuild.Command) -> Bool {
-        true
+    private func targetExistsInRootPackages(graph: PackageGraph, _ targetName: String) -> Bool {
+        guard let target = graph.reachableTargets.first(where: { $0.c99name == targetName }) else {
+            return false
+        }
+
+        // FIXME: Remove hardcoded build env.
+        let env = BuildEnvironment(platform: .macOS, configuration: .debug)
+        if graph.isInRootPackages(target, satisfying: env) {
+            return true
+        }
+        return false
+    }
+
+    func shouldCommandStart(_ command: SPMLLBuild.Command) -> Bool {
+        let skipDependencyCommands = ProcessEnv.vars["SWIFTPM_LLB_SKIP_DEPENDENCY_COMMANDS"] != nil
+        guard skipDependencyCommands, let graph = try? self.buildSystem.getPackageGraph() else {
+            return true
+        }
+
+        let cmdName = command.name
+        if cmdName.hasPrefix("C.") && cmdName.hasSuffix(".module") {
+            let (module, _) = String(cmdName.dropFirst(2).dropLast(7)).spm_split(around: "-")
+            return targetExistsInRootPackages(graph: graph, module)
+        } else if command.description.hasPrefix("Compiling") {
+            if let module = command.description.spm_split(around: " ").1 {
+                return targetExistsInRootPackages(graph: graph, module)
+            }
+        } else if cmdName.hasPrefix("/"),
+            let objectFile = try? AbsolutePath(validating: command.name) {
+
+            if let targetNameExtIdx = objectFile.components.firstIndex(where: { $0.hasSuffix(".build") })  {
+                let (targetName, ext) = objectFile.components[targetNameExtIdx].spm_split(around: ".")
+                let allowedExt: Set = ["build", "product"]
+                if let ext = ext, allowedExt.contains(ext) {
+                    return targetExistsInRootPackages(graph: graph, targetName)
+                }
+            }
+        }
+        return true
     }
 
     func commandFinished(_ command: SPMLLBuild.Command, result: CommandResult) {
