@@ -141,6 +141,8 @@ let package = Package(
                 "PackageModel",
             ]
         ),
+    ] + [
+        .executable(name: "swift-build", targets: ["swift-build"]),
     ],
     targets: [
         // The `PackageDescription` target provides the API that is available
