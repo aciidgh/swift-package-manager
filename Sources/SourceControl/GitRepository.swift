@@ -599,6 +599,16 @@ public final class GitRepository: Repository, WorkingCheckout {
 
     // MARK: Working Checkout Interface
 
+    public func statusDescription() throws -> String {
+        try self.lock.withLock {
+            try callGit(
+                "status",
+                "--porcelain",
+                failureMessage: "Couldn’t check for status"
+            )
+        }
+    }
+
     public func hasUnpushedCommits() throws -> Bool {
         try self.lock.withLock {
             let hasOutput = try callGit(
