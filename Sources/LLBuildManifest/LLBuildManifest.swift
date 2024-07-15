@@ -204,6 +204,9 @@ public struct LLBuildManifest {
     /// The default target to build.
     public var defaultTarget: String = ""
 
+    /// The llbuild file system to use for the build.
+    public var fileSystem: String = "device-agnostic"
+
     public init() {
     }
 

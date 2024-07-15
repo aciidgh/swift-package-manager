@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 import Basics
+import enum TSCBasic.ProcessEnv
 
 private let namesToExclude = [".git", ".build"]
 
@@ -18,18 +19,22 @@ public struct LLBuildManifestWriter {
     private let manifest: LLBuildManifest
     // FIXME: since JSON is a superset of YAML and we don't need to parse these manifests,
     // we should just use `JSONEncoder` instead.
-    private var buffer = """
-    client:
-      name: basic
-      file-system: device-agnostic
-    tools: {}
-
-    """
+    private var buffer: String = ""
 
     private init(manifest: LLBuildManifest) {
         self.manifest = manifest
 
         self.render(targets: manifest.targets)
+
+        let fileSystem = ProcessEnv.vars["SWIFTPM_LLBUILD_FILESYSTEM"] ?? manifest.fileSystem
+
+        self.buffer += """
+            client:
+              name: basic
+              file-system: \(fileSystem)
+            tools: {}
+
+            """
 
         self.buffer += "default: \(manifest.defaultTarget.asJSON)\n"
 
