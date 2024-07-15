@@ -109,6 +109,12 @@ struct BuildCommandOptions: ParsableArguments {
     @OptionGroup()
     var testLibraryOptions: TestLibraryOptions
 
+    @Option
+    public var incrementalCASID: String?
+
+    @Flag
+    public var enableCASIncremental: Bool = false
+
     func validate() throws {
         // If --build-tests was not specified, it does not make sense to enable
         // or disable either testing library.
@@ -120,6 +126,9 @@ struct BuildCommandOptions: ParsableArguments {
         }
     }
 }
+
+import TSFCAS
+import TSFCASFileTree
 
 /// swift-build command namespace
 public struct SwiftBuildCommand: AsyncSwiftCommand {
@@ -159,6 +168,22 @@ public struct SwiftBuildCommand: AsyncSwiftCommand {
             return
         }
 
+        let group = MultiThreadedEventLoopGroup(
+            numberOfThreads: System.coreCount
+        )
+        let buildParameters = try swiftCommandState.productsBuildParameters
+        let buildDir = globalOptions.locations.scratchDirectory ?? buildParameters.dataPath.parentDirectory
+
+        let dbPath = buildParameters.dataPath.parentDirectory.appending(component: "cas.db")
+        try localFileSystem.createDirectory(dbPath.parentDirectory, recursive: true)
+        let sqliteCASDB = try SQLite(location: .path(dbPath))
+        let db = try SQLiteCAS(group: group, db: sqliteCASDB)
+
+        if let incrementalCASID = options.incrementalCASID,
+           let id = LLBDataID(string: incrementalCASID) {
+            try await casExport(db: db, id: id, buildDir: buildDir)
+        }
+
         guard let subset = options.buildSubset(observabilityScope: swiftCommandState.observabilityScope) else {
             throw ExitCode.failure
         }
@@ -195,6 +220,100 @@ public struct SwiftBuildCommand: AsyncSwiftCommand {
         } else {
             try build(swiftCommandState, subset: subset, productsBuildParameters: productsBuildParameters, toolsBuildParameters: toolsBuildParameters)
         }
+
+        let incrementalCASID = try await casImport(
+            db: db,
+            paths: [
+                productsBuildParameters.buildPath,
+                productsBuildParameters.llbuildManifest,
+                productsBuildParameters.pifManifest,
+            ],
+            buildDir: buildDir
+        )
+
+        print("Incremental CAS ID:", incrementalCASID)
+        try await group.shutdownGracefully()
+    }
+
+    private func casImport(
+        db: LLBCASDatabase,
+        paths: [AbsolutePath],
+        buildDir: AbsolutePath
+    ) async throws -> LLBDataID {
+        let ctx = Context()
+        let opts = LLBCASFileTree.ImportOptions()
+
+        let client = LLBCASFSClient(db)
+        var rootTree = try await client.storeDir(.directory(files: [:]), ctx).get()
+        let fs = localFileSystem
+
+        for importPath in paths {
+            if !fs.exists(importPath) {
+                continue
+            }
+            print("importing", importPath)
+            let dataID = try await LLBCASFileTree.import(
+                path: .init(importPath),
+                to: db,
+                options: opts,
+                stats: nil,
+                ctx
+            ).get()
+
+            if fs.isFile(importPath) {
+                let node = try await client.load(dataID, ctx).get()
+                let subTree = try await LLBCASFileTree.create(
+                    files: [
+                        node.asDirectoryEntry(filename: importPath.basename)
+                    ], in: db, ctx).get()
+                rootTree = try await rootTree.merge(with: subTree, in: db, ctx).get()
+            } else if fs.isDirectory(importPath) {
+                var subTree = try await LLBCASFileTree.load(id: dataID, from: db, ctx).get()
+                let relativePath = importPath.relative(to: buildDir)
+                for subPath in relativePath.components.reversed() {
+                    subTree = try await LLBCASFileTree.create(
+                        files: [
+                            subTree.asDirectoryEntry(filename: subPath)
+                        ], in: db, ctx).get()
+                }
+                rootTree = try await rootTree.merge(with: subTree, in: db, ctx).get()
+            }
+        }
+
+        return rootTree.id
+    }
+
+    private func casExport(
+        db: LLBCASDatabase,
+        id: LLBDataID,
+        buildDir: AbsolutePath
+    ) async throws {
+        let ctx = Context()
+        let opts = LLBCASFileTree.ImportOptions()
+
+        let client = LLBCASFSClient(db)
+        let fs = localFileSystem
+
+        let node = try await client.load(id, ctx).get()
+        for file in node.tree?.files ?? [] {
+            let oldPath = buildDir.appending(component: file.name)
+            print("removing", oldPath)
+            try fs.removeFileTree(oldPath)
+        }
+
+        print("exporting", id)
+
+        try fs.createDirectory(buildDir, recursive: true)
+
+        let stats = LLBCASFileTree.ExportProgressStatsInt64()
+        try await LLBCASFileTree.export(
+            id,
+            from: db,
+            to: .init(validating: buildDir.pathString),
+            stats: stats,
+            ctx
+        ).get()
+        print("exported \(id) to \(buildDir)")
     }
 
     private func build(
@@ -226,5 +345,126 @@ public struct SwiftBuildCommand: AsyncSwiftCommand {
 public extension _SwiftCommand {
     func buildSystemProvider(_ swiftCommandState: SwiftCommandState) throws -> BuildSystemProvider {
         swiftCommandState.defaultBuildSystemProvider
+    }
+}
+
+import TSCUtility
+import Foundation
+import NIO
+
+final class SQLiteCAS: LLBCASDatabase {
+    public let group: LLBFuturesDispatchGroup
+    let db: SQLite
+
+    /// Create a new sqlite-backed CAS database.
+    ///
+    /// Note: The caller is responsibe for closing the backing sqlite database.
+    init(
+        group: LLBFuturesDispatchGroup,
+        db: SQLite
+    ) throws {
+        self.group = group
+        self.db = db
+
+        let table = """
+                CREATE TABLE IF NOT EXISTS CAS (
+                    id BLOB PRIMARY KEY NOT NULL,
+                    refs BLOB NOT NULL,
+                    data BLOB NOT NULL
+                );
+            """
+
+        try db.exec(query: table)
+        try db.exec(query: "PRAGMA journal_mode=WAL;")
+    }
+
+    public func supportedFeatures() -> LLBFuture<LLBCASFeatures> {
+        group.next().makeSucceededFuture(LLBCASFeatures(preservesIDs: true))
+    }
+
+    public func contains(
+        _ id: LLBDataID,
+        _ ctx: Context
+    ) -> LLBFuture<Bool> {
+        return group.next().submit {
+            let readStmt = try self.db.prepare(query: "SELECT 1 FROM CAS WHERE id == ? LIMIT 1;")
+            try readStmt.bind([.blob(id.bytes)])
+            let row = try readStmt.step()
+            try readStmt.finalize()
+            return row != nil
+        }
+    }
+
+    public func get(
+        _ id: LLBDataID,
+        _ ctx: Context
+    ) -> LLBFuture<LLBCASObject?> {
+        return group.next().submit {
+            try self._get(id, ctx)
+        }
+    }
+
+    private func _get(
+        _ id: LLBDataID,
+        _ ctx: Context
+    ) throws -> LLBCASObject? {
+        let readStmt = try self.db.prepare(query: "SELECT id, refs, data FROM CAS WHERE id == ? LIMIT 1;")
+        try readStmt.bind([.string(id.debugDescription)])
+
+        let row = try readStmt.step()
+        let refsData = row?.blob(at: 1) ?? Data()
+
+        let data = (row?.blob(at: 2)).flatMap {
+            LLBByteBuffer(data: $0)
+        }
+
+        try readStmt.finalize()
+
+        let refs = try JSONDecoder().decode([LLBDataID].self, from: refsData)
+        return LLBCASObject(refs: refs, data: data ?? .init())
+    }
+
+    public func put(
+        knownID id: LLBDataID,
+        refs: [LLBDataID],
+        data: LLBByteBuffer,
+        _ ctx: Context
+    ) -> LLBFuture<LLBDataID> {
+        return group.next().submit {
+            let refsData = try JSONEncoder().encode(refs)
+
+            let writeStmt = try self.db.prepare(query: "INSERT OR IGNORE INTO CAS VALUES (?, ?, ?)")
+            let bindings: [SQLite.SQLiteValue] = [
+                .string(id.debugDescription),
+                .blob(refsData),
+                .blob(Data(data.readableBytesView)),
+            ]
+            try writeStmt.bind(bindings)
+            try writeStmt.step()
+            try writeStmt.finalize()
+            return id
+        }
+    }
+
+    public func identify(
+        refs: [LLBDataID],
+        data: LLBByteBuffer,
+        _ ctx: Context
+    ) -> LLBFuture<LLBDataID> {
+        group.next().makeSucceededFuture(LLBDataID(blake3hash: data, refs: refs))
+    }
+
+    public func put(
+        refs: [LLBDataID],
+        data: LLBByteBuffer,
+        _ ctx: Context
+    ) -> LLBFuture<LLBDataID> {
+        let knownID = LLBDataID(blake3hash: data, refs: refs)
+        return put(
+            knownID: knownID,
+            refs: refs,
+            data: data,
+            ctx
+        )
     }
 }

@@ -184,9 +184,11 @@ package final class SQLite {
 
         /// Get blob data at the given column index.
         package func blob(at index: Int32) -> Data {
-            let bytes = sqlite3_column_blob(stmt, index)!
-            let count = sqlite3_column_bytes(stmt, index)
-            return Data(bytes: bytes, count: Int(count))
+            if let bytes = sqlite3_column_blob(stmt, index) {
+                let count = sqlite3_column_bytes(stmt, index)
+                return Data(bytes: bytes, count: Int(count))
+            }
+            return Data()
         }
 
         /// Get string at the given column index.

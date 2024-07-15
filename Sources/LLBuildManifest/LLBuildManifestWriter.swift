@@ -23,11 +23,7 @@ public struct LLBuildManifestWriter {
 
     private init(manifest: LLBuildManifest) {
         self.manifest = manifest
-
-        self.render(targets: manifest.targets)
-
         let fileSystem = ProcessEnv.vars["SWIFTPM_LLBUILD_FILESYSTEM"] ?? manifest.fileSystem
-
         self.buffer += """
             client:
               name: basic
@@ -35,6 +31,7 @@ public struct LLBuildManifestWriter {
             tools: {}
 
             """
+        self.render(targets: manifest.targets)
 
         self.buffer += "default: \(manifest.defaultTarget.asJSON)\n"
 

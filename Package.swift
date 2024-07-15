@@ -436,6 +436,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "OrderedCollections", package: "swift-collections"),
                 .product(name: "SwiftIDEUtils", package: "swift-syntax"),
+                .product(name: "SwiftToolsSupportCAS", package: "swift-tools-support-async"),
                 "Basics",
                 "Build",
                 "CoreCommands",
@@ -827,6 +828,7 @@ if ProcessInfo.processInfo.environment["SWIFTCI_USE_LOCAL_DEPS"] == nil {
         // used by 'swift-driver' and 'sourcekit-lsp'. Please coordinate
         // dependency version changes here with those projects.
         .package(url: "https://github.com/apple/swift-argument-parser.git", .upToNextMinor(from: "1.4.0")),
+        .package(url: "git@github.com:apple/swift-tools-support-async.git", branch: relatedDependenciesBranch),
         .package(url: "https://github.com/apple/swift-driver.git", branch: relatedDependenciesBranch),
         .package(url: "https://github.com/apple/swift-crypto.git", .upToNextMinor(from: "3.0.0")),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", branch: relatedDependenciesBranch),
